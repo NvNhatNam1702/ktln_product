@@ -1,6 +1,8 @@
 import shutil
 import os
-from fastapi import FastAPI, UploadFile, File
+import uuid
+from typing import List
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 
 from infer_adapter import PixelNeRFWrapper
@@ -11,7 +13,7 @@ app = FastAPI()
 
 # Configuration
 CHECKPOINT = "pixel-nerf/checkpoints/sn64_unseen_a2"
-CONF_PATH = "/home/nampc/code/kltn/product/backend/pixel-nerf/conf/exp/sn64_unseen.conf"
+CONF_PATH = "pixel-nerf/conf/exp/sn64_unseen.conf"
 
 
 # Initialize AI
@@ -37,22 +39,56 @@ async def reconstruct(file: UploadFile = File(...)):
 
 
 @app.post("/pointcloud")
-async def pointcloud():
+async def pointcloud(
+    transforms: UploadFile = File(..., description="transforms.json file"),
+    images: List[UploadFile] = File(..., description="Multiple image files referenced in transforms.json"),
+    download: bool = Form(True),
+):
     """
-    Example endpoint that calls export_ply().
-
-    TODO: update `transforms_path` and `images_dir` to match your dataset layout.
+    Upload the NeRF dataset (transforms.json + individual image files), generate a point cloud,
+    and optionally download the resulting PLY file.
     """
-    # Example paths – adjust to your actual data
-    transforms_path = "path/to/transforms.json"
-    images_dir = "path/to/images_dir"
-    out_ply = "output/result.ply"
+    # Create a unique working directory for this request
+    session_id = str(uuid.uuid4())
+    work_dir = os.path.join("uploads", "pointcloud", session_id)
+    os.makedirs(work_dir, exist_ok=True)
 
-    os.makedirs(os.path.dirname(out_ply), exist_ok=True)
+    # Save transforms.json
+    transforms_path = os.path.join(work_dir, "transforms.json")
+    try:
+        with open(transforms_path, "wb+") as f:
+            shutil.copyfileobj(transforms.file, f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save transforms.json: {e}")
+
+    # Save each uploaded image into the working directory
+    try:
+        if not images:
+            raise HTTPException(status_code=400, detail="No images uploaded")
+
+        for img in images:
+            if not img.filename:
+                continue
+            img_path = os.path.join(work_dir, img.filename)
+            os.makedirs(os.path.dirname(img_path), exist_ok=True)
+            with open(img_path, "wb+") as f:
+                shutil.copyfileobj(img.file, f)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save uploaded images: {e}")
+
+    # The images_dir should be the root where transforms.json expects the image paths to start from.
+    images_dir = work_dir
+
+    # Output PLY path
+    out_dir = os.path.join(work_dir, "output")
+    os.makedirs(out_dir, exist_ok=True)
+    out_ply = os.path.join(out_dir, "result.ply")
 
     try:
         export_ply(
-            weights=CHECKPOINT,
+            weights=CHECKPOINT + "/pixel_nerf_latest",
             transforms=transforms_path,
             out=out_ply,
             images_dir=images_dir,
@@ -60,10 +96,17 @@ async def pointcloud():
             config=CONF_PATH,
             export_format="ply",
         )
-        return FileResponse(out_ply, media_type="application/octet-stream", filename="result.ply")
     except Exception as e:
         print(f"Error: {e}")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if download:
+        return FileResponse(out_ply, media_type="application/octet-stream", filename="result.ply")
+
+    return {
+        "message": "Point cloud generated",
+        "file_path": out_ply,
+    }
 
 
 if __name__ == "__main__":
