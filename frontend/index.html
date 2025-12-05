@@ -3,11 +3,253 @@
 <head>
     <meta charset="UTF-8">
     <title>PixelNeRF Web Interface</title>
+    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/PLYLoader.js"></script>
+    <script>
+    // Enhanced PLY Loader that handles both ASCII and binary PLY files
+    // Fallback if CDN loader doesn't work or needs enhancement
+    if (typeof THREE !== 'undefined') {
+        // Use CDN loader if available, otherwise create our own
+        if (!THREE.PLYLoader) {
+            THREE.PLYLoader = function() {};
+            THREE.PLYLoader.prototype = {
+            parse: function(data) {
+                const buffer = data instanceof ArrayBuffer ? data : new TextEncoder().encode(data).buffer;
+                const view = new DataView(buffer);
+                const decoder = new TextDecoder();
+                
+                // Read header to determine format
+                let headerText = '';
+                let headerEnd = 0;
+                let isBinary = false;
+                let isLittleEndian = true;
+                let vertexCount = 0;
+                let hasColors = false;
+                let colorOffset = 12; // x, y, z = 12 bytes (3 * 4 bytes float)
+                
+                // Read header (first 1000 bytes should be enough)
+                const headerBytes = Math.min(1000, buffer.byteLength);
+                headerText = decoder.decode(new Uint8Array(buffer, 0, headerBytes));
+                
+                // Check if binary
+                if (headerText.includes('binary_little_endian')) {
+                    isBinary = true;
+                    isLittleEndian = true;
+                } else if (headerText.includes('binary_big_endian')) {
+                    isBinary = true;
+                    isLittleEndian = false;
+                }
+                
+                // Parse header
+                const headerLines = headerText.split('\n');
+                for (let i = 0; i < headerLines.length; i++) {
+                    const line = headerLines[i].trim();
+                    if (line.startsWith('element vertex')) {
+                        vertexCount = parseInt(line.split(/\s+/)[2]);
+                    }
+                    if (line.includes('property') && (line.includes('red') || line.includes('diffuse'))) {
+                        hasColors = true;
+                    }
+                    if (line === 'end_header') {
+                        headerEnd = headerText.indexOf('end_header') + 'end_header'.length;
+                        break;
+                    }
+                }
+                
+                // Find actual header end (account for newline after 'end_header')
+                let dataOffset = headerEnd;
+                // Skip 'end_header' text and newline(s)
+                const endHeaderText = 'end_header';
+                const endHeaderPos = headerText.indexOf(endHeaderText);
+                if (endHeaderPos !== -1) {
+                    dataOffset = endHeaderPos + endHeaderText.length;
+                    // Skip newline characters
+                    while (dataOffset < buffer.byteLength) {
+                        const byte = view.getUint8(dataOffset);
+                        if (byte === 0x0A || byte === 0x0D) { // newline (LF or CR)
+                            dataOffset++;
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    // Fallback: use headerEnd position
+                    dataOffset = headerEnd;
+                }
+                
+                const geometry = new THREE.BufferGeometry();
+                const vertices = [];
+                const colors = [];
+                
+                if (isBinary) {
+                    // Parse binary PLY
+                    let offset = dataOffset;
+                    const vertexSize = hasColors ? 15 : 12; // 3 floats (12 bytes) + optional 3 uchar colors (3 bytes)
+                    let validVertices = 0;
+                    
+                    for (let i = 0; i < vertexCount && offset + vertexSize <= buffer.byteLength; i++) {
+                        // Read x, y, z (float32, 4 bytes each)
+                        const x = view.getFloat32(offset, isLittleEndian);
+                        const y = view.getFloat32(offset + 4, isLittleEndian);
+                        const z = view.getFloat32(offset + 8, isLittleEndian);
+                        
+                        if (!isNaN(x) && !isNaN(y) && !isNaN(z) && 
+                            isFinite(x) && isFinite(y) && isFinite(z)) {
+                            vertices.push(x, y, z);
+                            validVertices++;
+                            
+                            if (hasColors && offset + 14 < buffer.byteLength) {
+                                const r = view.getUint8(offset + 12) / 255;
+                                const g = view.getUint8(offset + 13) / 255;
+                                const b = view.getUint8(offset + 14) / 255;
+                                colors.push(r, g, b);
+                            }
+                        }
+                        
+                        offset += vertexSize;
+                    }
+                    
+                    // If binary parsing failed, try ASCII as fallback
+                    if (validVertices === 0 && vertexCount > 0) {
+                        console.warn('Binary parsing failed, trying ASCII fallback');
+                        isBinary = false; // Fall through to ASCII parsing
+                    }
+                }
+                
+                if (!isBinary) {
+                    // Parse ASCII PLY
+                    const text = decoder.decode(buffer);
+                    const lines = text.split('\n');
+                    const dataStart = headerLines.length;
+                    
+                    for (let i = dataStart; i < dataStart + vertexCount && i < lines.length; i++) {
+                        const line = lines[i].trim();
+                        if (!line) continue;
+                        const parts = line.split(/\s+/);
+                        if (parts.length >= 3) {
+                            const x = parseFloat(parts[0]);
+                            const y = parseFloat(parts[1]);
+                            const z = parseFloat(parts[2]);
+                            
+                            if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+                                vertices.push(x, y, z);
+                                
+                                if (hasColors && parts.length >= 6) {
+                                    colors.push(
+                                        parseInt(parts[3]) / 255,
+                                        parseInt(parts[4]) / 255,
+                                        parseInt(parts[5]) / 255
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (vertices.length === 0) {
+                    console.error('PLY Loader: No valid vertices found. File may be corrupted or in unsupported format.');
+                    // Return empty geometry instead of crashing
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+                    return geometry;
+                }
+                
+                console.log(`PLY Loader: Loaded ${vertices.length / 3} vertices${hasColors ? ' with colors' : ''}`);
+                
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                if (hasColors && colors.length > 0 && colors.length === vertices.length) {
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                    geometry.hasColors = true;
+                }
+                
+                return geometry;
+            }
+        };
+        } // Close if (!THREE.PLYLoader)
+        
+        // Enhance existing loader if it exists but doesn't handle binary well
+        if (THREE.PLYLoader && THREE.PLYLoader.prototype) {
+            const originalParse = THREE.PLYLoader.prototype.parse;
+            THREE.PLYLoader.prototype.parse = function(data) {
+                try {
+                    return originalParse.call(this, data);
+                } catch (e) {
+                    console.warn('CDN PLY Loader failed, using fallback:', e);
+                    // Fallback to our implementation
+                    const loader = new THREE.PLYLoader();
+                    return loader.parse(data);
+                }
+            };
+        }
+        
+        // Simple OrbitControls
+        if (!THREE.OrbitControls) {
+            THREE.OrbitControls = function(camera, domElement) {
+                this.object = camera;
+                this.domElement = domElement;
+                this.enableDamping = false;
+                this.dampingFactor = 0.05;
+                this.target = new THREE.Vector3();
+                
+                let spherical = new THREE.Spherical();
+                let rotateStart = new THREE.Vector2();
+                let rotateEnd = new THREE.Vector2();
+                let isRotating = false;
+                
+                const onMouseDown = (e) => {
+                    isRotating = true;
+                    rotateStart.set(e.clientX, e.clientY);
+                };
+                const onMouseMove = (e) => {
+                    if (!isRotating) return;
+                    rotateEnd.set(e.clientX, e.clientY);
+                    const deltaX = (rotateEnd.x - rotateStart.x) * 0.01;
+                    const deltaY = (rotateEnd.y - rotateStart.y) * 0.01;
+                    
+                    spherical.setFromVector3(camera.position.clone().sub(this.target));
+                    spherical.theta -= deltaX;
+                    spherical.phi += deltaY;
+                    spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi));
+                    
+                    camera.position.setFromSpherical(spherical).add(this.target);
+                    camera.lookAt(this.target);
+                    
+                    rotateStart.copy(rotateEnd);
+                };
+                const onMouseUp = () => { isRotating = false; };
+                
+                domElement.addEventListener('mousedown', onMouseDown);
+                domElement.addEventListener('mousemove', onMouseMove);
+                domElement.addEventListener('mouseup', onMouseUp);
+                domElement.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY * 0.001;
+                    const direction = camera.position.clone().sub(this.target).normalize();
+                    camera.position.add(direction.multiplyScalar(delta));
+                });
+                
+                this.update = function() {};
+                this.reset = function() {
+                    camera.position.set(0, 0, 2);
+                    this.target.set(0, 0, 0);
+                    camera.lookAt(this.target);
+                };
+            };
+        }
+    }
+    </script>
     <style>
         body { margin: 0; display: flex; font-family: sans-serif; background: #1a1a1a; color: white; overflow: hidden; }
         
         /* SIDEBAR */
-        #sidebar { width: 300px; padding: 20px; background: #222; border-right: 1px solid #444; display: flex; flex-direction: column; gap: 15px; z-index: 10; }
+        #sidebar { width: 300px; padding: 20px; background: #222; border-right: 1px solid #444; display: flex; flex-direction: column; gap: 15px; z-index: 10; overflow-y: auto; }
+        
+        .tabs { display: flex; gap: 5px; margin-bottom: 10px; }
+        .tab { flex: 1; padding: 10px; background: #333; border: none; color: white; cursor: pointer; border-radius: 4px; }
+        .tab.active { background: #4f46e5; }
+        .tab:hover { background: #4338ca; }
+        
+        .tab-content { display: none; }
+        .tab-content.active { display: flex; flex-direction: column; gap: 15px; }
         
         .upload-box {
             border: 2px dashed #555; padding: 20px; text-align: center; border-radius: 8px; cursor: pointer; transition: 0.2s;
@@ -16,6 +258,9 @@
         
         #previewContainer { margin-top: 10px; }
         #previewImage { max-width: 100%; height: auto; border-radius: 4px; border: 1px solid #444; display: none; }
+        
+        .file-list { font-size: 0.85em; color: #aaa; margin-top: 5px; }
+        .file-item { padding: 5px; background: #2a2a2a; border-radius: 4px; margin: 3px 0; }
 
         button { padding: 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
         button:hover { background: #4338ca; }
@@ -25,35 +270,100 @@
         #main-content { flex-grow: 1; display: flex; justify-content: center; align-items: center; position: relative; }
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; pointer-events: none; opacity: 0; transition: opacity 0.3s;
+            background: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 100;
         }
         #outputGif { max-width: 80%; max-height: 80%; display: none; border-radius: 8px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        #viewer3d { width: 100%; height: 100%; display: none; }
+        #viewer3d.active { display: block; }
     </style>
 </head>
 <body>
 
 <div id="sidebar">
     <h2>PixelNeRF Web</h2>
-    <p style="font-size: 0.9em; color: #aaa;">Upload a single image of an object.</p>
     
-    <div class="upload-box" onclick="document.getElementById('fileInput').click()">
-        Click to Select Image
-    </div>
-    <input type="file" id="fileInput" accept="image/*" style="display:none">
-    
-    <div id="previewContainer">
-        <img id="previewImage" src="#" alt="Image Preview">
+    <div class="tabs">
+        <button class="tab active" onclick="window.switchTab('gif')">GIF</button>
+        <button class="tab" onclick="window.switchTab('pointcloud')">Point Cloud</button>
     </div>
     
-    <button id="generateBtn" disabled>Generate GIF</button>
+    <!-- GIF Generation Tab -->
+    <div id="gif-tab" class="tab-content active">
+        <p style="font-size: 0.9em; color: #aaa;">Upload a single image of an object.</p>
+        
+        <div class="upload-box" onclick="document.getElementById('fileInput').click()">
+            Click to Select Image
+        </div>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+        
+        <div id="previewContainer">
+            <img id="previewImage" src="#" alt="Image Preview">
+        </div>
+        
+        <button id="generateBtn" disabled>Generate GIF</button>
+    </div>
+    
+    <!-- Point Cloud Tab -->
+    <div id="pointcloud-tab" class="tab-content">
+        <p style="font-size: 0.9em; color: #aaa;">Upload transforms.json and images for point cloud generation.</p>
+        
+        <div class="upload-box" onclick="document.getElementById('transformsInput').click()">
+            Click to Select transforms.json
+        </div>
+        <input type="file" id="transformsInput" accept=".json" style="display:none">
+        <div id="transformsInfo" class="file-list"></div>
+        
+        <div class="upload-box" onclick="document.getElementById('imagesInput').click()">
+            Click to Select Images (Multiple)
+        </div>
+        <input type="file" id="imagesInput" accept="image/*" multiple style="display:none">
+        <div id="imagesInfo" class="file-list"></div>
+        
+        <button id="generatePointCloudBtn" disabled>Generate Point Cloud</button>
+        
+        <button id="downloadPLYBtn" disabled style="display: none; margin-top: 10px; background: #10b981;">
+            Download PLY File
+        </button>
+    </div>
 </div>
 
 <div id="main-content">
     <div id="loading">Processing Neural Field...</div>
     <img id="outputGif" src="#" alt="Generated GIF">
+    <canvas id="viewer3d"></canvas>
 </div>
 
 <script type="module">
+    // Tab switching
+    window.switchTab = function(tabName) {
+        // Update tab buttons
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.classList.remove('active');
+            if (tab.textContent.trim().toLowerCase() === tabName || 
+                (tabName === 'gif' && tab.textContent.trim() === 'GIF') ||
+                (tabName === 'pointcloud' && tab.textContent.trim() === 'Point Cloud')) {
+                tab.classList.add('active');
+            }
+        });
+        
+        // Update tab content
+        document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+        const targetTab = document.getElementById(tabName + '-tab');
+        if (targetTab) {
+            targetTab.classList.add('active');
+        }
+        
+        // Hide outputs
+        document.getElementById('outputGif').style.display = 'none';
+        document.getElementById('viewer3d').classList.remove('active');
+        
+        // Hide download button when switching tabs
+        if (tabName !== 'pointcloud') {
+            downloadPLYBtn.style.display = 'none';
+        }
+    };
+
+    // ========== GIF Generation ==========
     const fileInput = document.getElementById('fileInput');
     const previewImage = document.getElementById('previewImage');
     const generateBtn = document.getElementById('generateBtn');
@@ -68,7 +378,7 @@
             previewImage.src = URL.createObjectURL(selectedFile);
             previewImage.style.display = 'block';
             generateBtn.disabled = false;
-            outputGif.style.display = 'none'; // Hide previous GIF
+            outputGif.style.display = 'none';
         } else {
             previewImage.style.display = 'none';
             generateBtn.disabled = true;
@@ -79,14 +389,15 @@
         if (!selectedFile) return;
 
         loading.style.opacity = 1;
+        loading.textContent = 'Processing Neural Field...';
         generateBtn.disabled = true;
         outputGif.style.display = 'none';
+        document.getElementById('viewer3d').classList.remove('active');
 
         const formData = new FormData();
-        formData.append('file', selectedFile); // Changed from 'files' to 'file'
+        formData.append('file', selectedFile);
 
         try {
-            // Call Python Backend
             const res = await fetch('http://localhost:8000/reconstruct', {
                 method: 'POST',
                 body: formData
@@ -110,6 +421,319 @@
             generateBtn.disabled = false;
         }
     });
+
+    // ========== Point Cloud Generation ==========
+    const transformsInput = document.getElementById('transformsInput');
+    const imagesInput = document.getElementById('imagesInput');
+    const generatePointCloudBtn = document.getElementById('generatePointCloudBtn');
+    const downloadPLYBtn = document.getElementById('downloadPLYBtn');
+    const transformsInfo = document.getElementById('transformsInfo');
+    const imagesInfo = document.getElementById('imagesInfo');
+    let selectedTransforms = null;
+    let selectedImages = [];
+    let currentPLYBlob = null; // Store the PLY file blob for downloading
+
+    transformsInput.addEventListener('change', (e) => {
+        selectedTransforms = e.target.files[0];
+        if (selectedTransforms) {
+            transformsInfo.innerHTML = `<div class="file-item">✓ ${selectedTransforms.name}</div>`;
+            updatePointCloudButton();
+        } else {
+            transformsInfo.innerHTML = '';
+            updatePointCloudButton();
+        }
+    });
+
+    imagesInput.addEventListener('change', (e) => {
+        selectedImages = Array.from(e.target.files);
+        if (selectedImages.length > 0) {
+            imagesInfo.innerHTML = selectedImages.map(img => 
+                `<div class="file-item">✓ ${img.name}</div>`
+            ).join('');
+            updatePointCloudButton();
+        } else {
+            imagesInfo.innerHTML = '';
+            updatePointCloudButton();
+        }
+    });
+
+    function updatePointCloudButton() {
+        generatePointCloudBtn.disabled = !(selectedTransforms && selectedImages.length > 0);
+    }
+
+    generatePointCloudBtn.addEventListener('click', async () => {
+        if (!selectedTransforms || selectedImages.length === 0) return;
+
+        loading.style.opacity = 1;
+        loading.textContent = 'Generating Point Cloud... This may take several minutes.';
+        generatePointCloudBtn.disabled = true;
+        downloadPLYBtn.style.display = 'none';
+        downloadPLYBtn.disabled = true;
+        currentPLYBlob = null;
+        outputGif.style.display = 'none';
+        document.getElementById('viewer3d').classList.remove('active');
+
+        const formData = new FormData();
+        formData.append('transforms', selectedTransforms);
+        formData.append('download', 'true');
+        
+        selectedImages.forEach(img => {
+            formData.append('images', img);
+        });
+
+        try {
+            const res = await fetch('http://localhost:8000/pointcloud', {
+                method: 'POST',
+                body: formData
+            });
+
+            if(!res.ok) {
+                const errorText = await res.text();
+                throw new Error(`Server responded with ${res.status}: ${errorText}`);
+            }
+
+            const blob = await res.blob();
+            
+            // Store blob for download
+            currentPLYBlob = blob;
+            
+            // Load and display PLY file in 3D viewer
+            await loadPLYInViewer(blob);
+            
+            // Show download button
+            downloadPLYBtn.style.display = 'block';
+            downloadPLYBtn.disabled = false;
+
+        } catch (err) {
+            alert("Error: " + err.message);
+            downloadPLYBtn.style.display = 'none';
+            currentPLYBlob = null;
+        } finally {
+            loading.style.opacity = 0;
+            generatePointCloudBtn.disabled = false;
+        }
+    });
+
+    // Download PLY file
+    downloadPLYBtn.addEventListener('click', () => {
+        if (!currentPLYBlob) {
+            alert('No PLY file available to download');
+            return;
+        }
+        
+        // Create download link
+        const url = URL.createObjectURL(currentPLYBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'pointcloud.ply';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    });
+
+    // ========== 3D PLY Viewer ==========
+    let scene, camera, renderer, controls, pointCloud;
+
+    function initViewer() {
+        // Wait for Three.js to load
+        if (typeof THREE === 'undefined') {
+            setTimeout(initViewer, 100);
+            return;
+        }
+        
+        const canvas = document.getElementById('viewer3d');
+        const width = canvas.parentElement.clientWidth;
+        const height = canvas.parentElement.clientHeight;
+
+        // Scene
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a);
+
+        // Camera
+        camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+        camera.position.set(0, 0, 2);
+
+        // Renderer
+        renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(window.devicePixelRatio);
+
+        // Controls
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(1, 1, 1);
+        scene.add(directionalLight);
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            const width = canvas.parentElement.clientWidth;
+            const height = canvas.parentElement.clientHeight;
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        });
+
+        window.viewer3d = canvas;
+    }
+
+    async function loadPLYInViewer(blob) {
+        try {
+            // Wait for Three.js to load
+            if (typeof THREE === 'undefined') {
+                await new Promise(resolve => {
+                    const checkInterval = setInterval(() => {
+                        if (typeof THREE !== 'undefined') {
+                            clearInterval(checkInterval);
+                            resolve();
+                        }
+                    }, 100);
+                });
+            }
+            
+            if (!scene) {
+                initViewer();
+            }
+
+            // Remove existing point cloud
+            if (pointCloud) {
+                scene.remove(pointCloud);
+                pointCloud.geometry.dispose();
+                if (pointCloud.material) pointCloud.material.dispose();
+            }
+
+            // Create PLY loader
+            const loader = new THREE.PLYLoader();
+            
+            // Convert blob to array buffer
+            const arrayBuffer = await blob.arrayBuffer();
+            
+            // Parse PLY file
+            let geometry;
+            try {
+                geometry = loader.parse(arrayBuffer);
+            } catch (parseError) {
+                console.error('PLY parsing error:', parseError);
+                throw new Error('Failed to parse PLY file: ' + parseError.message);
+            }
+
+            // Validate geometry
+            const positionAttr = geometry.getAttribute('position');
+            if (!positionAttr || positionAttr.count === 0) {
+                throw new Error('PLY file contains no vertices');
+            }
+
+            // Check for NaN values
+            const positions = positionAttr.array;
+            let hasNaN = false;
+            for (let i = 0; i < positions.length; i++) {
+                if (isNaN(positions[i])) {
+                    hasNaN = true;
+                    console.warn(`NaN found at position index ${i}`);
+                    break;
+                }
+            }
+
+            if (hasNaN) {
+                // Filter out NaN values
+                console.warn('Filtering out NaN values from geometry');
+                const validPositions = [];
+                const validColors = [];
+                const colorAttr = geometry.getAttribute('color');
+                const colors = colorAttr ? colorAttr.array : null;
+                
+                for (let i = 0; i < positionAttr.count; i++) {
+                    const x = positions[i * 3];
+                    const y = positions[i * 3 + 1];
+                    const z = positions[i * 3 + 2];
+                    
+                    if (!isNaN(x) && !isNaN(y) && !isNaN(z) && 
+                        isFinite(x) && isFinite(y) && isFinite(z)) {
+                        validPositions.push(x, y, z);
+                        if (colors) {
+                            validColors.push(
+                                colors[i * 3] || 1,
+                                colors[i * 3 + 1] || 1,
+                                colors[i * 3 + 2] || 1
+                            );
+                        }
+                    }
+                }
+                
+                if (validPositions.length === 0) {
+                    throw new Error('No valid vertices found in PLY file');
+                }
+                
+                // Create new geometry with valid vertices
+                geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(validPositions, 3));
+                if (validColors.length > 0) {
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(validColors, 3));
+                    geometry.hasColors = true;
+                }
+            }
+
+            // Create material
+            const material = new THREE.PointsMaterial({
+                size: 0.01,
+                vertexColors: geometry.hasColors,
+                sizeAttenuation: true
+            });
+
+            // Create points
+            pointCloud = new THREE.Points(geometry, material);
+            scene.add(pointCloud);
+
+            // Center and scale (with error handling)
+            try {
+                geometry.computeBoundingBox();
+                const bbox = geometry.boundingBox;
+                
+                if (bbox && !isNaN(bbox.min.x) && !isNaN(bbox.max.x)) {
+                    const center = bbox.getCenter(new THREE.Vector3());
+                    const size = bbox.getSize(new THREE.Vector3());
+                    const maxDim = Math.max(size.x, size.y, size.z);
+                    
+                    if (maxDim > 0 && isFinite(maxDim)) {
+                        const scale = 2.0 / maxDim;
+                        pointCloud.scale.multiplyScalar(scale);
+                        pointCloud.position.sub(center.multiplyScalar(scale));
+                    }
+                }
+            } catch (bboxError) {
+                console.warn('Could not compute bounding box, using default view:', bboxError);
+            }
+
+            // Reset camera
+            camera.position.set(0, 0, 2);
+            if (controls && controls.reset) {
+                controls.reset();
+            }
+
+            // Show viewer
+            document.getElementById('viewer3d').classList.add('active');
+            console.log('PLY file loaded successfully');
+            
+        } catch (err) {
+            console.error('Error loading PLY file:', err);
+            alert('Error loading point cloud: ' + err.message);
+            throw err;
+        }
+    }
 </script>
 
 </body>
