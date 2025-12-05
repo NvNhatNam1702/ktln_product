@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from infer_adapter import PixelNeRFWrapper
-from export_ply2 import export_ply
+
 
 
 app = FastAPI()
@@ -22,8 +22,8 @@ app.add_middleware(
 )
 
 # Configuration
-CHECKPOINT = "pixel-nerf/checkpoints/sn64_unseen_a2"
-CONF_PATH = "pixel-nerf/conf/exp/sn64_unseen.conf"
+CHECKPOINT = "pixel-nerf/checkpoints/nam_final_2"
+CONF_PATH = "pixel-nerf/conf/exp/multi_obj.conf"
 
 
 # Initialize AI
@@ -48,75 +48,58 @@ async def reconstruct(file: UploadFile = File(...)):
         return {"error": str(e)}
 
 
-@app.post("/pointcloud")
-async def pointcloud(
-    transforms: UploadFile = File(..., description="transforms.json file"),
-    images: List[UploadFile] = File(..., description="Multiple image files referenced in transforms.json"),
-    download: bool = Form(True),
+@app.post("/extract_mesh")
+async def extract_mesh(
+    file: UploadFile = File(...),
+    output_format: str = Form("obj"),
+    resolution: int = Form(128),
+    isosurface: float = Form(50.0),
 ):
     """
-    Upload the NeRF dataset (transforms.json + individual image files), generate a point cloud,
-    and optionally download the resulting PLY file.
+    Extract a 3D mesh from a single input image.
+    
+    Args:
+        file: Input image file
+        output_format: "obj" or "ply" (default: "obj")
+        resolution: Grid resolution for marching cubes (default: 128)
+        isosurface: Isosurface threshold for marching cubes (default: 50.0)
+    
+    Returns:
+        Mesh file (OBJ or PLY format)
     """
-    # Create a unique working directory for this request
-    session_id = str(uuid.uuid4())
-    work_dir = os.path.join("uploads", "pointcloud", session_id)
-    os.makedirs(work_dir, exist_ok=True)
+    os.makedirs("uploads", exist_ok=True)
+    file_path = f"uploads/{file.filename}"
 
-    # Save transforms.json
-    transforms_path = os.path.join(work_dir, "transforms.json")
-    try:
-        with open(transforms_path, "wb+") as f:
-            shutil.copyfileobj(transforms.file, f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save transforms.json: {e}")
-
-    # Save each uploaded image into the working directory
-    try:
-        if not images:
-            raise HTTPException(status_code=400, detail="No images uploaded")
-
-        for img in images:
-            if not img.filename:
-                continue
-            img_path = os.path.join(work_dir, img.filename)
-            os.makedirs(os.path.dirname(img_path), exist_ok=True)
-            with open(img_path, "wb+") as f:
-                shutil.copyfileobj(img.file, f)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save uploaded images: {e}")
-
-    # The images_dir should be the root where transforms.json expects the image paths to start from.
-    images_dir = work_dir
-
-    # Output PLY path
-    out_dir = os.path.join(work_dir, "output")
-    os.makedirs(out_dir, exist_ok=True)
-    out_ply = os.path.join(out_dir, "result.ply")
+    # Save upload
+    with open(file_path, "wb+") as f:
+        shutil.copyfileobj(file.file, f)
 
     try:
-        export_ply(
-            weights=CHECKPOINT + "/pixel_nerf_latest",
-            transforms=transforms_path,
-            out=out_ply,
-            images_dir=images_dir,
-            device="cuda:0",   # or "cpu"
-            config=CONF_PATH,
-            export_format="ply",
+        # Extract mesh
+        mesh_path = ai_engine.extract_mesh(
+            file_path,
+            output_format=output_format,
+            resolution=resolution,
+            isosurface=isosurface
         )
+        
+        # Determine media type
+        if output_format.lower() == "ply":
+            media_type = "application/octet-stream"
+            filename = "mesh.ply"
+        else:
+            media_type = "application/octet-stream"
+            filename = "mesh.obj"
+        
+        return FileResponse(mesh_path, media_type=media_type, filename=filename)
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error extracting mesh: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-    if download:
-        return FileResponse(out_ply, media_type="application/octet-stream", filename="result.ply")
 
-    return {
-        "message": "Point cloud generated",
-        "file_path": out_ply,
-    }
+
 
 
 if __name__ == "__main__":

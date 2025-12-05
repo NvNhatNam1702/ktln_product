@@ -3,237 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <title>PixelNeRF Web Interface</title>
-    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/PLYLoader.js"></script>
-    <script>
-    // Enhanced PLY Loader that handles both ASCII and binary PLY files
-    // Fallback if CDN loader doesn't work or needs enhancement
-    if (typeof THREE !== 'undefined') {
-        // Use CDN loader if available, otherwise create our own
-        if (!THREE.PLYLoader) {
-            THREE.PLYLoader = function() {};
-            THREE.PLYLoader.prototype = {
-            parse: function(data) {
-                const buffer = data instanceof ArrayBuffer ? data : new TextEncoder().encode(data).buffer;
-                const view = new DataView(buffer);
-                const decoder = new TextDecoder();
-                
-                // Read header to determine format
-                let headerText = '';
-                let headerEnd = 0;
-                let isBinary = false;
-                let isLittleEndian = true;
-                let vertexCount = 0;
-                let hasColors = false;
-                let colorOffset = 12; // x, y, z = 12 bytes (3 * 4 bytes float)
-                
-                // Read header (first 1000 bytes should be enough)
-                const headerBytes = Math.min(1000, buffer.byteLength);
-                headerText = decoder.decode(new Uint8Array(buffer, 0, headerBytes));
-                
-                // Check if binary
-                if (headerText.includes('binary_little_endian')) {
-                    isBinary = true;
-                    isLittleEndian = true;
-                } else if (headerText.includes('binary_big_endian')) {
-                    isBinary = true;
-                    isLittleEndian = false;
-                }
-                
-                // Parse header
-                const headerLines = headerText.split('\n');
-                for (let i = 0; i < headerLines.length; i++) {
-                    const line = headerLines[i].trim();
-                    if (line.startsWith('element vertex')) {
-                        vertexCount = parseInt(line.split(/\s+/)[2]);
-                    }
-                    if (line.includes('property') && (line.includes('red') || line.includes('diffuse'))) {
-                        hasColors = true;
-                    }
-                    if (line === 'end_header') {
-                        headerEnd = headerText.indexOf('end_header') + 'end_header'.length;
-                        break;
-                    }
-                }
-                
-                // Find actual header end (account for newline after 'end_header')
-                let dataOffset = headerEnd;
-                // Skip 'end_header' text and newline(s)
-                const endHeaderText = 'end_header';
-                const endHeaderPos = headerText.indexOf(endHeaderText);
-                if (endHeaderPos !== -1) {
-                    dataOffset = endHeaderPos + endHeaderText.length;
-                    // Skip newline characters
-                    while (dataOffset < buffer.byteLength) {
-                        const byte = view.getUint8(dataOffset);
-                        if (byte === 0x0A || byte === 0x0D) { // newline (LF or CR)
-                            dataOffset++;
-                        } else {
-                            break;
-                        }
-                    }
-                } else {
-                    // Fallback: use headerEnd position
-                    dataOffset = headerEnd;
-                }
-                
-                const geometry = new THREE.BufferGeometry();
-                const vertices = [];
-                const colors = [];
-                
-                if (isBinary) {
-                    // Parse binary PLY
-                    let offset = dataOffset;
-                    const vertexSize = hasColors ? 15 : 12; // 3 floats (12 bytes) + optional 3 uchar colors (3 bytes)
-                    let validVertices = 0;
-                    
-                    for (let i = 0; i < vertexCount && offset + vertexSize <= buffer.byteLength; i++) {
-                        // Read x, y, z (float32, 4 bytes each)
-                        const x = view.getFloat32(offset, isLittleEndian);
-                        const y = view.getFloat32(offset + 4, isLittleEndian);
-                        const z = view.getFloat32(offset + 8, isLittleEndian);
-                        
-                        if (!isNaN(x) && !isNaN(y) && !isNaN(z) && 
-                            isFinite(x) && isFinite(y) && isFinite(z)) {
-                            vertices.push(x, y, z);
-                            validVertices++;
-                            
-                            if (hasColors && offset + 14 < buffer.byteLength) {
-                                const r = view.getUint8(offset + 12) / 255;
-                                const g = view.getUint8(offset + 13) / 255;
-                                const b = view.getUint8(offset + 14) / 255;
-                                colors.push(r, g, b);
-                            }
-                        }
-                        
-                        offset += vertexSize;
-                    }
-                    
-                    // If binary parsing failed, try ASCII as fallback
-                    if (validVertices === 0 && vertexCount > 0) {
-                        console.warn('Binary parsing failed, trying ASCII fallback');
-                        isBinary = false; // Fall through to ASCII parsing
-                    }
-                }
-                
-                if (!isBinary) {
-                    // Parse ASCII PLY
-                    const text = decoder.decode(buffer);
-                    const lines = text.split('\n');
-                    const dataStart = headerLines.length;
-                    
-                    for (let i = dataStart; i < dataStart + vertexCount && i < lines.length; i++) {
-                        const line = lines[i].trim();
-                        if (!line) continue;
-                        const parts = line.split(/\s+/);
-                        if (parts.length >= 3) {
-                            const x = parseFloat(parts[0]);
-                            const y = parseFloat(parts[1]);
-                            const z = parseFloat(parts[2]);
-                            
-                            if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-                                vertices.push(x, y, z);
-                                
-                                if (hasColors && parts.length >= 6) {
-                                    colors.push(
-                                        parseInt(parts[3]) / 255,
-                                        parseInt(parts[4]) / 255,
-                                        parseInt(parts[5]) / 255
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if (vertices.length === 0) {
-                    console.error('PLY Loader: No valid vertices found. File may be corrupted or in unsupported format.');
-                    // Return empty geometry instead of crashing
-                    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
-                    return geometry;
-                }
-                
-                console.log(`PLY Loader: Loaded ${vertices.length / 3} vertices${hasColors ? ' with colors' : ''}`);
-                
-                geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-                if (hasColors && colors.length > 0 && colors.length === vertices.length) {
-                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-                    geometry.hasColors = true;
-                }
-                
-                return geometry;
-            }
-        };
-        } // Close if (!THREE.PLYLoader)
-        
-        // Enhance existing loader if it exists but doesn't handle binary well
-        if (THREE.PLYLoader && THREE.PLYLoader.prototype) {
-            const originalParse = THREE.PLYLoader.prototype.parse;
-            THREE.PLYLoader.prototype.parse = function(data) {
-                try {
-                    return originalParse.call(this, data);
-                } catch (e) {
-                    console.warn('CDN PLY Loader failed, using fallback:', e);
-                    // Fallback to our implementation
-                    const loader = new THREE.PLYLoader();
-                    return loader.parse(data);
-                }
-            };
-        }
-        
-        // Simple OrbitControls
-        if (!THREE.OrbitControls) {
-            THREE.OrbitControls = function(camera, domElement) {
-                this.object = camera;
-                this.domElement = domElement;
-                this.enableDamping = false;
-                this.dampingFactor = 0.05;
-                this.target = new THREE.Vector3();
-                
-                let spherical = new THREE.Spherical();
-                let rotateStart = new THREE.Vector2();
-                let rotateEnd = new THREE.Vector2();
-                let isRotating = false;
-                
-                const onMouseDown = (e) => {
-                    isRotating = true;
-                    rotateStart.set(e.clientX, e.clientY);
-                };
-                const onMouseMove = (e) => {
-                    if (!isRotating) return;
-                    rotateEnd.set(e.clientX, e.clientY);
-                    const deltaX = (rotateEnd.x - rotateStart.x) * 0.01;
-                    const deltaY = (rotateEnd.y - rotateStart.y) * 0.01;
-                    
-                    spherical.setFromVector3(camera.position.clone().sub(this.target));
-                    spherical.theta -= deltaX;
-                    spherical.phi += deltaY;
-                    spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi));
-                    
-                    camera.position.setFromSpherical(spherical).add(this.target);
-                    camera.lookAt(this.target);
-                    
-                    rotateStart.copy(rotateEnd);
-                };
-                const onMouseUp = () => { isRotating = false; };
-                
-                domElement.addEventListener('mousedown', onMouseDown);
-                domElement.addEventListener('mousemove', onMouseMove);
-                domElement.addEventListener('mouseup', onMouseUp);
-                domElement.addEventListener('wheel', (e) => {
-                    e.preventDefault();
-                    const delta = e.deltaY * 0.001;
-                    const direction = camera.position.clone().sub(this.target).normalize();
-                    camera.position.add(direction.multiplyScalar(delta));
-                });
-                
-                this.update = function() {};
-                this.reset = function() {
-                    camera.position.set(0, 0, 2);
-                    this.target.set(0, 0, 0);
-                    camera.lookAt(this.target);
-                };
-            };
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
         }
     }
     </script>
@@ -251,6 +25,10 @@
         .tab-content { display: none; }
         .tab-content.active { display: flex; flex-direction: column; gap: 15px; }
         
+        .form-group { display: flex; flex-direction: column; gap: 5px; }
+        .form-group label { font-size: 0.85em; color: #aaa; }
+        .form-group input, .form-group select { padding: 8px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; }
+        
         .upload-box {
             border: 2px dashed #555; padding: 20px; text-align: center; border-radius: 8px; cursor: pointer; transition: 0.2s;
         }
@@ -258,6 +36,8 @@
         
         #previewContainer { margin-top: 10px; }
         #previewImage { max-width: 100%; height: auto; border-radius: 4px; border: 1px solid #444; display: none; }
+        #meshPreviewContainer { margin-top: 10px; }
+        #meshPreviewImage { max-width: 100%; height: auto; border-radius: 4px; border: 1px solid #444; display: none; }
         
         .file-list { font-size: 0.85em; color: #aaa; margin-top: 5px; }
         .file-item { padding: 5px; background: #2a2a2a; border-radius: 4px; margin: 3px 0; }
@@ -284,7 +64,7 @@
     
     <div class="tabs">
         <button class="tab active" onclick="window.switchTab('gif')">GIF</button>
-        <button class="tab" onclick="window.switchTab('pointcloud')">Point Cloud</button>
+        <button class="tab" onclick="window.switchTab('mesh')">Mesh</button>
     </div>
     
     <!-- GIF Generation Tab -->
@@ -303,26 +83,41 @@
         <button id="generateBtn" disabled>Generate GIF</button>
     </div>
     
-    <!-- Point Cloud Tab -->
-    <div id="pointcloud-tab" class="tab-content">
-        <p style="font-size: 0.9em; color: #aaa;">Upload transforms.json and images for point cloud generation.</p>
+    <!-- Mesh Extraction Tab -->
+    <div id="mesh-tab" class="tab-content">
+        <p style="font-size: 0.9em; color: #aaa;">Extract a 3D mesh from an image.</p>
         
-        <div class="upload-box" onclick="document.getElementById('transformsInput').click()">
-            Click to Select transforms.json
+        <div class="upload-box" onclick="document.getElementById('meshFileInput').click()">
+            Click to Select Image
         </div>
-        <input type="file" id="transformsInput" accept=".json" style="display:none">
-        <div id="transformsInfo" class="file-list"></div>
+        <input type="file" id="meshFileInput" accept="image/*" style="display:none">
         
-        <div class="upload-box" onclick="document.getElementById('imagesInput').click()">
-            Click to Select Images (Multiple)
+        <div id="meshPreviewContainer">
+            <img id="meshPreviewImage" src="#" alt="Image Preview">
         </div>
-        <input type="file" id="imagesInput" accept="image/*" multiple style="display:none">
-        <div id="imagesInfo" class="file-list"></div>
         
-        <button id="generatePointCloudBtn" disabled>Generate Point Cloud</button>
+        <div class="form-group">
+            <label for="outputFormat">Output Format:</label>
+            <select id="outputFormat">
+                <option value="obj">OBJ</option>
+                <option value="ply">PLY</option>
+            </select>
+        </div>
         
-        <button id="downloadPLYBtn" disabled style="display: none; margin-top: 10px; background: #10b981;">
-            Download PLY File
+        <div class="form-group">
+            <label for="resolution">Resolution:</label>
+            <input type="number" id="resolution" value="128" min="64" max="256" step="32">
+        </div>
+        
+        <div class="form-group">
+            <label for="isosurface">Isosurface Threshold:</label>
+            <input type="number" id="isosurface" value="50.0" min="0" max="100" step="5">
+        </div>
+        
+        <button id="extractMeshBtn" disabled>Extract Mesh</button>
+        
+        <button id="downloadMeshBtn" disabled style="display: none; margin-top: 10px; background: #10b981;">
+            Download Mesh
         </button>
     </div>
 </div>
@@ -334,6 +129,17 @@
 </div>
 
 <script type="module">
+    import * as THREE from 'three';
+    import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+    import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // Make THREE available globally for compatibility
+    window.THREE = THREE;
+    window.OBJLoader = OBJLoader;
+    window.PLYLoader = PLYLoader;
+    window.OrbitControls = OrbitControls;
+
     // Tab switching
     window.switchTab = function(tabName) {
         // Update tab buttons
@@ -341,7 +147,7 @@
             tab.classList.remove('active');
             if (tab.textContent.trim().toLowerCase() === tabName || 
                 (tabName === 'gif' && tab.textContent.trim() === 'GIF') ||
-                (tabName === 'pointcloud' && tab.textContent.trim() === 'Point Cloud')) {
+                (tabName === 'mesh' && tab.textContent.trim() === 'Mesh')) {
                 tab.classList.add('active');
             }
         });
@@ -358,8 +164,8 @@
         document.getElementById('viewer3d').classList.remove('active');
         
         // Hide download button when switching tabs
-        if (tabName !== 'pointcloud') {
-            downloadPLYBtn.style.display = 'none';
+        if (tabName !== 'mesh') {
+            document.getElementById('downloadMeshBtn').style.display = 'none';
         }
     };
 
@@ -422,67 +228,52 @@
         }
     });
 
-    // ========== Point Cloud Generation ==========
-    const transformsInput = document.getElementById('transformsInput');
-    const imagesInput = document.getElementById('imagesInput');
-    const generatePointCloudBtn = document.getElementById('generatePointCloudBtn');
-    const downloadPLYBtn = document.getElementById('downloadPLYBtn');
-    const transformsInfo = document.getElementById('transformsInfo');
-    const imagesInfo = document.getElementById('imagesInfo');
-    let selectedTransforms = null;
-    let selectedImages = [];
-    let currentPLYBlob = null; // Store the PLY file blob for downloading
+    // ========== Mesh Extraction ==========
+    const meshFileInput = document.getElementById('meshFileInput');
+    const meshPreviewImage = document.getElementById('meshPreviewImage');
+    const extractMeshBtn = document.getElementById('extractMeshBtn');
+    const downloadMeshBtn = document.getElementById('downloadMeshBtn');
+    const outputFormat = document.getElementById('outputFormat');
+    const resolution = document.getElementById('resolution');
+    const isosurface = document.getElementById('isosurface');
+    let selectedMeshFile = null;
+    let currentMeshBlob = null;
 
-    transformsInput.addEventListener('change', (e) => {
-        selectedTransforms = e.target.files[0];
-        if (selectedTransforms) {
-            transformsInfo.innerHTML = `<div class="file-item">✓ ${selectedTransforms.name}</div>`;
-            updatePointCloudButton();
+    meshFileInput.addEventListener('change', (e) => {
+        selectedMeshFile = e.target.files[0];
+        
+        if (selectedMeshFile) {
+            meshPreviewImage.src = URL.createObjectURL(selectedMeshFile);
+            meshPreviewImage.style.display = 'block';
+            extractMeshBtn.disabled = false;
+            document.getElementById('viewer3d').classList.remove('active');
+            downloadMeshBtn.style.display = 'none';
         } else {
-            transformsInfo.innerHTML = '';
-            updatePointCloudButton();
+            meshPreviewImage.style.display = 'none';
+            extractMeshBtn.disabled = true;
         }
     });
 
-    imagesInput.addEventListener('change', (e) => {
-        selectedImages = Array.from(e.target.files);
-        if (selectedImages.length > 0) {
-            imagesInfo.innerHTML = selectedImages.map(img => 
-                `<div class="file-item">✓ ${img.name}</div>`
-            ).join('');
-            updatePointCloudButton();
-        } else {
-            imagesInfo.innerHTML = '';
-            updatePointCloudButton();
-        }
-    });
-
-    function updatePointCloudButton() {
-        generatePointCloudBtn.disabled = !(selectedTransforms && selectedImages.length > 0);
-    }
-
-    generatePointCloudBtn.addEventListener('click', async () => {
-        if (!selectedTransforms || selectedImages.length === 0) return;
+    extractMeshBtn.addEventListener('click', async () => {
+        if (!selectedMeshFile) return;
 
         loading.style.opacity = 1;
-        loading.textContent = 'Generating Point Cloud... This may take several minutes.';
-        generatePointCloudBtn.disabled = true;
-        downloadPLYBtn.style.display = 'none';
-        downloadPLYBtn.disabled = true;
-        currentPLYBlob = null;
+        loading.textContent = 'Extracting Mesh... This may take several minutes.';
+        extractMeshBtn.disabled = true;
+        downloadMeshBtn.style.display = 'none';
+        downloadMeshBtn.disabled = true;
+        currentMeshBlob = null;
         outputGif.style.display = 'none';
         document.getElementById('viewer3d').classList.remove('active');
 
         const formData = new FormData();
-        formData.append('transforms', selectedTransforms);
-        formData.append('download', 'true');
-        
-        selectedImages.forEach(img => {
-            formData.append('images', img);
-        });
+        formData.append('file', selectedMeshFile);
+        formData.append('output_format', outputFormat.value);
+        formData.append('resolution', resolution.value);
+        formData.append('isosurface', isosurface.value);
 
         try {
-            const res = await fetch('http://localhost:8000/pointcloud', {
+            const res = await fetch('http://localhost:8000/extract_mesh', {
                 method: 'POST',
                 body: formData
             });
@@ -493,55 +284,46 @@
             }
 
             const blob = await res.blob();
+            currentMeshBlob = blob;
             
-            // Store blob for download
-            currentPLYBlob = blob;
-            
-            // Load and display PLY file in 3D viewer
-            await loadPLYInViewer(blob);
+            // Load and display mesh in 3D viewer
+            await loadMeshInViewer(blob, outputFormat.value);
             
             // Show download button
-            downloadPLYBtn.style.display = 'block';
-            downloadPLYBtn.disabled = false;
+            downloadMeshBtn.style.display = 'block';
+            downloadMeshBtn.disabled = false;
 
         } catch (err) {
             alert("Error: " + err.message);
-            downloadPLYBtn.style.display = 'none';
-            currentPLYBlob = null;
+            downloadMeshBtn.style.display = 'none';
+            currentMeshBlob = null;
         } finally {
             loading.style.opacity = 0;
-            generatePointCloudBtn.disabled = false;
+            extractMeshBtn.disabled = false;
         }
     });
 
-    // Download PLY file
-    downloadPLYBtn.addEventListener('click', () => {
-        if (!currentPLYBlob) {
-            alert('No PLY file available to download');
+    // Download mesh file
+    downloadMeshBtn.addEventListener('click', () => {
+        if (!currentMeshBlob) {
+            alert('No mesh file available to download');
             return;
         }
         
-        // Create download link
-        const url = URL.createObjectURL(currentPLYBlob);
+        const url = URL.createObjectURL(currentMeshBlob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'pointcloud.ply';
+        a.download = `mesh.${outputFormat.value}`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     });
 
-    // ========== 3D PLY Viewer ==========
-    let scene, camera, renderer, controls, pointCloud;
+    // ========== 3D Mesh Viewer ==========
+    let scene, camera, renderer, controls, meshObject;
 
     function initViewer() {
-        // Wait for Three.js to load
-        if (typeof THREE === 'undefined') {
-            setTimeout(initViewer, 100);
-            return;
-        }
-        
         const canvas = document.getElementById('viewer3d');
         const width = canvas.parentElement.clientWidth;
         const height = canvas.parentElement.clientHeight;
@@ -560,16 +342,21 @@
         renderer.setPixelRatio(window.devicePixelRatio);
 
         // Controls
-        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
+        controls.minDistance = 0.5;
+        controls.maxDistance = 10;
 
         // Lights
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         scene.add(ambientLight);
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(1, 1, 1);
-        scene.add(directionalLight);
+        const directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight1.position.set(1, 1, 1);
+        scene.add(directionalLight1);
+        const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+        directionalLight2.position.set(-1, -1, -1);
+        scene.add(directionalLight2);
 
         // Animation loop
         function animate() {
@@ -587,150 +374,176 @@
             camera.updateProjectionMatrix();
             renderer.setSize(width, height);
         });
-
-        window.viewer3d = canvas;
     }
 
-    async function loadPLYInViewer(blob) {
+    async function loadMeshInViewer(blob, format) {
         try {
-            // Wait for Three.js to load
-            if (typeof THREE === 'undefined') {
-                await new Promise(resolve => {
-                    const checkInterval = setInterval(() => {
-                        if (typeof THREE !== 'undefined') {
-                            clearInterval(checkInterval);
-                            resolve();
-                        }
-                    }, 100);
-                });
-            }
-            
             if (!scene) {
                 initViewer();
             }
 
-            // Remove existing point cloud
-            if (pointCloud) {
-                scene.remove(pointCloud);
-                pointCloud.geometry.dispose();
-                if (pointCloud.material) pointCloud.material.dispose();
+            // Remove existing mesh
+            if (meshObject) {
+                scene.remove(meshObject);
+                if (meshObject.geometry) meshObject.geometry.dispose();
+                if (meshObject.material) {
+                    if (Array.isArray(meshObject.material)) {
+                        meshObject.material.forEach(mat => mat.dispose());
+                    } else {
+                        meshObject.material.dispose();
+                    }
+                }
             }
 
-            // Create PLY loader
-            const loader = new THREE.PLYLoader();
-            
-            // Convert blob to array buffer
-            const arrayBuffer = await blob.arrayBuffer();
-            
-            // Parse PLY file
+            // Convert blob to text or array buffer
             let geometry;
-            try {
+            
+            if (format.toLowerCase() === 'obj') {
+                // Load OBJ file
+                const text = await blob.text();
+                const loader = new OBJLoader();
+                const object = loader.parse(text);
+                
+                // OBJLoader returns a Group, so we need to handle multiple meshes
+                if (object.children.length === 0) {
+                    throw new Error('OBJ file contains no geometry');
+                }
+                
+                // If there's only one child, use its geometry directly
+                if (object.children.length === 1) {
+                    geometry = object.children[0].geometry;
+                } else {
+                    // Merge multiple geometries
+                    const geometries = [];
+                    object.children.forEach(child => {
+                        if (child.geometry) {
+                            geometries.push(child.geometry);
+                        }
+                    });
+                    
+                    if (geometries.length === 0) {
+                        throw new Error('OBJ file contains no valid geometry');
+                    }
+                    
+                    // Use BufferGeometryUtils to merge, or manually merge
+                    const mergedGeometry = new THREE.BufferGeometry();
+                    const mergedPositions = [];
+                    const mergedNormals = [];
+                    const mergedUvs = [];
+                    const mergedIndices = [];
+                    let vertexOffset = 0;
+                    
+                    geometries.forEach(geom => {
+                        const pos = geom.attributes.position;
+                        const norm = geom.attributes.normal;
+                        const uv = geom.attributes.uv;
+                        
+                        // Add positions
+                        for (let i = 0; i < pos.count; i++) {
+                            mergedPositions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+                            if (norm) {
+                                mergedNormals.push(norm.getX(i), norm.getY(i), norm.getZ(i));
+                            }
+                            if (uv) {
+                                mergedUvs.push(uv.getX(i), uv.getY(i));
+                            }
+                        }
+                        
+                        // Add indices with offset
+                        if (geom.index) {
+                            const indices = geom.index;
+                            for (let i = 0; i < indices.count; i++) {
+                                mergedIndices.push(indices.getX(i) + vertexOffset);
+                            }
+                        } else {
+                            // If no index, create sequential indices
+                            for (let i = 0; i < pos.count; i++) {
+                                mergedIndices.push(vertexOffset + i);
+                            }
+                        }
+                        
+                        vertexOffset += pos.count;
+                    });
+                    
+                    mergedGeometry.setAttribute('position', new THREE.Float32BufferAttribute(mergedPositions, 3));
+                    if (mergedNormals.length > 0) {
+                        mergedGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(mergedNormals, 3));
+                    }
+                    if (mergedUvs.length > 0) {
+                        mergedGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(mergedUvs, 2));
+                    }
+                    if (mergedIndices.length > 0) {
+                        mergedGeometry.setIndex(mergedIndices);
+                    }
+                    
+                    geometry = mergedGeometry;
+                }
+            } else {
+                // Load PLY file
+                const arrayBuffer = await blob.arrayBuffer();
+                const loader = new PLYLoader();
                 geometry = loader.parse(arrayBuffer);
-            } catch (parseError) {
-                console.error('PLY parsing error:', parseError);
-                throw new Error('Failed to parse PLY file: ' + parseError.message);
             }
 
             // Validate geometry
-            const positionAttr = geometry.getAttribute('position');
+            if (!geometry || !geometry.attributes || !geometry.attributes.position) {
+                throw new Error('Mesh file contains no valid geometry');
+            }
+
+            const positionAttr = geometry.attributes.position;
             if (!positionAttr || positionAttr.count === 0) {
-                throw new Error('PLY file contains no vertices');
+                throw new Error('Mesh file contains no vertices');
             }
 
-            // Check for NaN values
-            const positions = positionAttr.array;
-            let hasNaN = false;
-            for (let i = 0; i < positions.length; i++) {
-                if (isNaN(positions[i])) {
-                    hasNaN = true;
-                    console.warn(`NaN found at position index ${i}`);
-                    break;
-                }
-            }
-
-            if (hasNaN) {
-                // Filter out NaN values
-                console.warn('Filtering out NaN values from geometry');
-                const validPositions = [];
-                const validColors = [];
-                const colorAttr = geometry.getAttribute('color');
-                const colors = colorAttr ? colorAttr.array : null;
-                
-                for (let i = 0; i < positionAttr.count; i++) {
-                    const x = positions[i * 3];
-                    const y = positions[i * 3 + 1];
-                    const z = positions[i * 3 + 2];
-                    
-                    if (!isNaN(x) && !isNaN(y) && !isNaN(z) && 
-                        isFinite(x) && isFinite(y) && isFinite(z)) {
-                        validPositions.push(x, y, z);
-                        if (colors) {
-                            validColors.push(
-                                colors[i * 3] || 1,
-                                colors[i * 3 + 1] || 1,
-                                colors[i * 3 + 2] || 1
-                            );
-                        }
-                    }
-                }
-                
-                if (validPositions.length === 0) {
-                    throw new Error('No valid vertices found in PLY file');
-                }
-                
-                // Create new geometry with valid vertices
-                geometry = new THREE.BufferGeometry();
-                geometry.setAttribute('position', new THREE.Float32BufferAttribute(validPositions, 3));
-                if (validColors.length > 0) {
-                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(validColors, 3));
-                    geometry.hasColors = true;
-                }
+            // Compute normals if not present
+            if (!geometry.attributes.normal) {
+                geometry.computeVertexNormals();
             }
 
             // Create material
-            const material = new THREE.PointsMaterial({
-                size: 0.01,
-                vertexColors: geometry.hasColors,
-                sizeAttenuation: true
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x888888,
+                metalness: 0.3,
+                roughness: 0.7,
+                flatShading: false
             });
 
-            // Create points
-            pointCloud = new THREE.Points(geometry, material);
-            scene.add(pointCloud);
+            // Create mesh
+            meshObject = new THREE.Mesh(geometry, material);
+            scene.add(meshObject);
 
-            // Center and scale (with error handling)
+            // Center and scale
             try {
                 geometry.computeBoundingBox();
                 const bbox = geometry.boundingBox;
                 
-                if (bbox && !isNaN(bbox.min.x) && !isNaN(bbox.max.x)) {
+                if (bbox) {
                     const center = bbox.getCenter(new THREE.Vector3());
                     const size = bbox.getSize(new THREE.Vector3());
                     const maxDim = Math.max(size.x, size.y, size.z);
                     
-                    if (maxDim > 0 && isFinite(maxDim)) {
-                        const scale = 2.0 / maxDim;
-                        pointCloud.scale.multiplyScalar(scale);
-                        pointCloud.position.sub(center.multiplyScalar(scale));
+                    if (maxDim > 0) {
+                        const scale = 1.8 / maxDim;
+                        meshObject.scale.multiplyScalar(scale);
+                        meshObject.position.sub(center.multiplyScalar(scale));
                     }
                 }
             } catch (bboxError) {
-                console.warn('Could not compute bounding box, using default view:', bboxError);
+                console.warn('Could not compute bounding box:', bboxError);
             }
 
             // Reset camera
             camera.position.set(0, 0, 2);
-            if (controls && controls.reset) {
-                controls.reset();
-            }
+            controls.target.set(0, 0, 0);
+            controls.update();
 
             // Show viewer
             document.getElementById('viewer3d').classList.add('active');
-            console.log('PLY file loaded successfully');
+            console.log('Mesh loaded successfully');
             
         } catch (err) {
-            console.error('Error loading PLY file:', err);
-            alert('Error loading point cloud: ' + err.message);
+            console.error('Error loading mesh:', err);
+            alert('Error loading mesh: ' + err.message);
             throw err;
         }
     }
