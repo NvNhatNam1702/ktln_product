@@ -4,12 +4,22 @@ import uuid
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from infer_adapter import PixelNeRFWrapper
 from export_ply2 import export_ply
 
 
 app = FastAPI()
+
+# Enable CORS to allow frontend to access the API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins like ["http://localhost:8080"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configuration
 CHECKPOINT = "pixel-nerf/checkpoints/sn64_unseen_a2"
