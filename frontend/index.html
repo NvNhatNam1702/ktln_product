@@ -1,553 +1,108 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>PixelNeRF Web Interface</title>
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-        }
-    }
-    </script>
+    <meta charset="UTF-8" />
+    <title>PixelNeRF Render</title>
     <style>
-        body { margin: 0; display: flex; font-family: sans-serif; background: #1a1a1a; color: white; overflow: hidden; }
-        
-        /* SIDEBAR */
-        #sidebar { width: 300px; padding: 20px; background: #222; border-right: 1px solid #444; display: flex; flex-direction: column; gap: 15px; z-index: 10; overflow-y: auto; }
-        
-        .tabs { display: flex; gap: 5px; margin-bottom: 10px; }
-        .tab { flex: 1; padding: 10px; background: #333; border: none; color: white; cursor: pointer; border-radius: 4px; }
-        .tab.active { background: #4f46e5; }
-        .tab:hover { background: #4338ca; }
-        
-        .tab-content { display: none; }
-        .tab-content.active { display: flex; flex-direction: column; gap: 15px; }
-        
-        .form-group { display: flex; flex-direction: column; gap: 5px; }
-        .form-group label { font-size: 0.85em; color: #aaa; }
-        .form-group input, .form-group select { padding: 8px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; }
-        
-        .upload-box {
-            border: 2px dashed #555; padding: 20px; text-align: center; border-radius: 8px; cursor: pointer; transition: 0.2s;
-        }
-        .upload-box:hover { border-color: #4f46e5; background: #2a2a2a; }
-        
-        #previewContainer { margin-top: 10px; }
-        #previewImage { max-width: 100%; height: auto; border-radius: 4px; border: 1px solid #444; display: none; }
-        #meshPreviewContainer { margin-top: 10px; }
-        #meshPreviewImage { max-width: 100%; height: auto; border-radius: 4px; border: 1px solid #444; display: none; }
-        
-        .file-list { font-size: 0.85em; color: #aaa; margin-top: 5px; }
-        .file-item { padding: 5px; background: #2a2a2a; border-radius: 4px; margin: 3px 0; }
-
-        button { padding: 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
-        button:hover { background: #4338ca; }
-        button:disabled { background: #555; cursor: not-allowed; }
-
-        /* MAIN CONTENT */
-        #main-content { flex-grow: 1; display: flex; justify-content: center; align-items: center; position: relative; }
-        #loading {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 100;
-        }
-        #outputGif { max-width: 80%; max-height: 80%; display: none; border-radius: 8px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
-        #viewer3d { width: 100%; height: 100%; display: none; }
-        #viewer3d.active { display: block; }
+        body { margin: 0; font-family: sans-serif; background: #111; color: #eee; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .layout { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+        .card { background: #1c1c1c; padding: 24px; border-radius: 12px; width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+        h1 { margin: 0 0 12px 0; font-size: 1.4rem; }
+        p { margin: 0 0 16px 0; color: #bbb; }
+        .upload { border: 2px dashed #444; padding: 18px; text-align: center; border-radius: 10px; cursor: pointer; transition: 0.2s; }
+        .upload:hover { border-color: #6b7bff; background: #181818; }
+        input[type="file"] { display: none; }
+        .files { margin-top: 10px; font-size: 0.9rem; color: #ccc; }
+        .file-item { padding: 6px 8px; background: #222; border-radius: 6px; margin-top: 6px; }
+        button { margin-top: 14px; width: 100%; padding: 12px; background: #6b7bff; border: none; color: white; border-radius: 8px; font-weight: 700; cursor: pointer; }
+        button:disabled { background: #444; cursor: not-allowed; }
+        #status { margin-top: 12px; color: #bbb; font-size: 0.9rem; }
+        #output { margin-top: 12px; text-align: center; }
+        #output img { max-width: 520px; max-height: 520px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.4); display: none; }
+        .preview-panel { background: #1c1c1c; padding: 16px; border-radius: 12px; min-width: 360px; max-width: 560px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
+        .preview-title { margin: 0 0 10px 0; color: #ccc; font-size: 0.95rem; letter-spacing: 0.02em; }
     </style>
 </head>
 <body>
+    <div class="layout">
+        <div class="card">
+            <h1>PixelNeRF Render</h1>
+            <p>Upload one or more views of the same object. The server returns a spinning GIF.</p>
 
-<div id="sidebar">
-    <h2>PixelNeRF Web</h2>
-    
-    <div class="tabs">
-        <button class="tab active" onclick="window.switchTab('gif')">GIF</button>
-        <button class="tab" onclick="window.switchTab('mesh')">Mesh</button>
+            <label class="upload" for="fileInput">Click to select image(s)</label>
+            <input id="fileInput" type="file" accept="image/*" multiple />
+
+            <div class="files" id="fileList"></div>
+
+            <button id="renderBtn" disabled>Generate GIF</button>
+            <div id="status"></div>
+        </div>
+
+        <div class="preview-panel">
+            <div class="preview-title">Preview</div>
+            <div id="output">
+                <img id="outputGif" alt="Generated GIF" />
+            </div>
+        </div>
     </div>
-    
-    <!-- GIF Generation Tab -->
-    <div id="gif-tab" class="tab-content active">
-        <p style="font-size: 0.9em; color: #aaa;">Upload a single image of an object.</p>
-        
-        <div class="upload-box" onclick="document.getElementById('fileInput').click()">
-            Click to Select Image
-        </div>
-        <input type="file" id="fileInput" accept="image/*" style="display:none">
-        
-        <div id="previewContainer">
-            <img id="previewImage" src="#" alt="Image Preview">
-        </div>
-        
-        <button id="generateBtn" disabled>Generate GIF</button>
-    </div>
-    
-    <!-- Mesh Extraction Tab -->
-    <div id="mesh-tab" class="tab-content">
-        <p style="font-size: 0.9em; color: #aaa;">Extract a 3D mesh from an image.</p>
-        
-        <div class="upload-box" onclick="document.getElementById('meshFileInput').click()">
-            Click to Select Image
-        </div>
-        <input type="file" id="meshFileInput" accept="image/*" style="display:none">
-        
-        <div id="meshPreviewContainer">
-            <img id="meshPreviewImage" src="#" alt="Image Preview">
-        </div>
-        
-        <div class="form-group">
-            <label for="outputFormat">Output Format:</label>
-            <select id="outputFormat">
-                <option value="obj">OBJ</option>
-                <option value="ply">PLY</option>
-            </select>
-        </div>
-        
-        <div class="form-group">
-            <label for="resolution">Resolution:</label>
-            <input type="number" id="resolution" value="128" min="64" max="256" step="32">
-        </div>
-        
-        <div class="form-group">
-            <label for="isosurface">Isosurface Threshold:</label>
-            <input type="number" id="isosurface" value="50.0" min="0" max="100" step="5">
-        </div>
-        
-        <button id="extractMeshBtn" disabled>Extract Mesh</button>
-        
-        <button id="downloadMeshBtn" disabled style="display: none; margin-top: 10px; background: #10b981;">
-            Download Mesh
-        </button>
-    </div>
-</div>
 
-<div id="main-content">
-    <div id="loading">Processing Neural Field...</div>
-    <img id="outputGif" src="#" alt="Generated GIF">
-    <canvas id="viewer3d"></canvas>
-</div>
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const renderBtn = document.getElementById('renderBtn');
+        const statusEl = document.getElementById('status');
+        const outputGif = document.getElementById('outputGif');
 
-<script type="module">
-    import * as THREE from 'three';
-    import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-    import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
-    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        let files = [];
 
-    // Make THREE available globally for compatibility
-    window.THREE = THREE;
-    window.OBJLoader = OBJLoader;
-    window.PLYLoader = PLYLoader;
-    window.OrbitControls = OrbitControls;
-
-    // Tab switching
-    window.switchTab = function(tabName) {
-        // Update tab buttons
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.classList.remove('active');
-            if (tab.textContent.trim().toLowerCase() === tabName || 
-                (tabName === 'gif' && tab.textContent.trim() === 'GIF') ||
-                (tabName === 'mesh' && tab.textContent.trim() === 'Mesh')) {
-                tab.classList.add('active');
-            }
-        });
-        
-        // Update tab content
-        document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-        const targetTab = document.getElementById(tabName + '-tab');
-        if (targetTab) {
-            targetTab.classList.add('active');
-        }
-        
-        // Hide outputs
-        document.getElementById('outputGif').style.display = 'none';
-        document.getElementById('viewer3d').classList.remove('active');
-        
-        // Hide download button when switching tabs
-        if (tabName !== 'mesh') {
-            document.getElementById('downloadMeshBtn').style.display = 'none';
-        }
-    };
-
-    // ========== GIF Generation ==========
-    const fileInput = document.getElementById('fileInput');
-    const previewImage = document.getElementById('previewImage');
-    const generateBtn = document.getElementById('generateBtn');
-    const loading = document.getElementById('loading');
-    const outputGif = document.getElementById('outputGif');
-    let selectedFile = null;
-
-    fileInput.addEventListener('change', (e) => {
-        selectedFile = e.target.files[0];
-        
-        if (selectedFile) {
-            previewImage.src = URL.createObjectURL(selectedFile);
-            previewImage.style.display = 'block';
-            generateBtn.disabled = false;
+        fileInput.addEventListener('change', (e) => {
+            files = Array.from(e.target.files || []);
+            fileList.innerHTML = files.length
+                ? files.map(f => `<div class="file-item">${f.name}</div>`).join('')
+                : '';
+            renderBtn.disabled = files.length === 0;
             outputGif.style.display = 'none';
-        } else {
-            previewImage.style.display = 'none';
-            generateBtn.disabled = true;
-        }
-    });
-
-    generateBtn.addEventListener('click', async () => {
-        if (!selectedFile) return;
-
-        loading.style.opacity = 1;
-        loading.textContent = 'Processing Neural Field...';
-        generateBtn.disabled = true;
-        outputGif.style.display = 'none';
-        document.getElementById('viewer3d').classList.remove('active');
-
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-
-        try {
-            const res = await fetch('http://localhost:8000/reconstruct', {
-                method: 'POST',
-                body: formData
-            });
-
-            if(!res.ok) {
-                const errorText = await res.text();
-                throw new Error(`Server responded with ${res.status}: ${errorText}`);
-            }
-
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            
-            outputGif.src = url;
-            outputGif.style.display = 'block';
-
-        } catch (err) {
-            alert("Error: " + err.message);
-        } finally {
-            loading.style.opacity = 0;
-            generateBtn.disabled = false;
-        }
-    });
-
-    // ========== Mesh Extraction ==========
-    const meshFileInput = document.getElementById('meshFileInput');
-    const meshPreviewImage = document.getElementById('meshPreviewImage');
-    const extractMeshBtn = document.getElementById('extractMeshBtn');
-    const downloadMeshBtn = document.getElementById('downloadMeshBtn');
-    const outputFormat = document.getElementById('outputFormat');
-    const resolution = document.getElementById('resolution');
-    const isosurface = document.getElementById('isosurface');
-    let selectedMeshFile = null;
-    let currentMeshBlob = null;
-
-    meshFileInput.addEventListener('change', (e) => {
-        selectedMeshFile = e.target.files[0];
-        
-        if (selectedMeshFile) {
-            meshPreviewImage.src = URL.createObjectURL(selectedMeshFile);
-            meshPreviewImage.style.display = 'block';
-            extractMeshBtn.disabled = false;
-            document.getElementById('viewer3d').classList.remove('active');
-            downloadMeshBtn.style.display = 'none';
-        } else {
-            meshPreviewImage.style.display = 'none';
-            extractMeshBtn.disabled = true;
-        }
-    });
-
-    extractMeshBtn.addEventListener('click', async () => {
-        if (!selectedMeshFile) return;
-
-        loading.style.opacity = 1;
-        loading.textContent = 'Extracting Mesh... This may take several minutes.';
-        extractMeshBtn.disabled = true;
-        downloadMeshBtn.style.display = 'none';
-        downloadMeshBtn.disabled = true;
-        currentMeshBlob = null;
-        outputGif.style.display = 'none';
-        document.getElementById('viewer3d').classList.remove('active');
-
-        const formData = new FormData();
-        formData.append('file', selectedMeshFile);
-        formData.append('output_format', outputFormat.value);
-        formData.append('resolution', resolution.value);
-        formData.append('isosurface', isosurface.value);
-
-        try {
-            const res = await fetch('http://localhost:8000/extract_mesh', {
-                method: 'POST',
-                body: formData
-            });
-
-            if(!res.ok) {
-                const errorText = await res.text();
-                throw new Error(`Server responded with ${res.status}: ${errorText}`);
-            }
-
-            const blob = await res.blob();
-            currentMeshBlob = blob;
-            
-            // Load and display mesh in 3D viewer
-            await loadMeshInViewer(blob, outputFormat.value);
-            
-            // Show download button
-            downloadMeshBtn.style.display = 'block';
-            downloadMeshBtn.disabled = false;
-
-        } catch (err) {
-            alert("Error: " + err.message);
-            downloadMeshBtn.style.display = 'none';
-            currentMeshBlob = null;
-        } finally {
-            loading.style.opacity = 0;
-            extractMeshBtn.disabled = false;
-        }
-    });
-
-    // Download mesh file
-    downloadMeshBtn.addEventListener('click', () => {
-        if (!currentMeshBlob) {
-            alert('No mesh file available to download');
-            return;
-        }
-        
-        const url = URL.createObjectURL(currentMeshBlob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `mesh.${outputFormat.value}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    });
-
-    // ========== 3D Mesh Viewer ==========
-    let scene, camera, renderer, controls, meshObject;
-
-    function initViewer() {
-        const canvas = document.getElementById('viewer3d');
-        const width = canvas.parentElement.clientWidth;
-        const height = canvas.parentElement.clientHeight;
-
-        // Scene
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x1a1a1a);
-
-        // Camera
-        camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-        camera.position.set(0, 0, 2);
-
-        // Renderer
-        renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
-        renderer.setSize(width, height);
-        renderer.setPixelRatio(window.devicePixelRatio);
-
-        // Controls
-        controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
-        controls.minDistance = 0.5;
-        controls.maxDistance = 10;
-
-        // Lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        scene.add(ambientLight);
-        const directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight1.position.set(1, 1, 1);
-        scene.add(directionalLight1);
-        const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
-        directionalLight2.position.set(-1, -1, -1);
-        scene.add(directionalLight2);
-
-        // Animation loop
-        function animate() {
-            requestAnimationFrame(animate);
-            controls.update();
-            renderer.render(scene, camera);
-        }
-        animate();
-
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            const width = canvas.parentElement.clientWidth;
-            const height = canvas.parentElement.clientHeight;
-            camera.aspect = width / height;
-            camera.updateProjectionMatrix();
-            renderer.setSize(width, height);
+            statusEl.textContent = '';
         });
-    }
 
-    async function loadMeshInViewer(blob, format) {
-        try {
-            if (!scene) {
-                initViewer();
-            }
+        const apiBase = (() => {
+            const host = window.location.hostname || 'localhost';
+            return `http://${host}:8000`;
+        })();
 
-            // Remove existing mesh
-            if (meshObject) {
-                scene.remove(meshObject);
-                if (meshObject.geometry) meshObject.geometry.dispose();
-                if (meshObject.material) {
-                    if (Array.isArray(meshObject.material)) {
-                        meshObject.material.forEach(mat => mat.dispose());
-                    } else {
-                        meshObject.material.dispose();
-                    }
-                }
-            }
+        renderBtn.addEventListener('click', async () => {
+            if (!files.length) return;
 
-            // Convert blob to text or array buffer
-            let geometry;
-            
-            if (format.toLowerCase() === 'obj') {
-                // Load OBJ file
-                const text = await blob.text();
-                const loader = new OBJLoader();
-                const object = loader.parse(text);
-                
-                // OBJLoader returns a Group, so we need to handle multiple meshes
-                if (object.children.length === 0) {
-                    throw new Error('OBJ file contains no geometry');
-                }
-                
-                // If there's only one child, use its geometry directly
-                if (object.children.length === 1) {
-                    geometry = object.children[0].geometry;
-                } else {
-                    // Merge multiple geometries
-                    const geometries = [];
-                    object.children.forEach(child => {
-                        if (child.geometry) {
-                            geometries.push(child.geometry);
-                        }
-                    });
-                    
-                    if (geometries.length === 0) {
-                        throw new Error('OBJ file contains no valid geometry');
-                    }
-                    
-                    // Use BufferGeometryUtils to merge, or manually merge
-                    const mergedGeometry = new THREE.BufferGeometry();
-                    const mergedPositions = [];
-                    const mergedNormals = [];
-                    const mergedUvs = [];
-                    const mergedIndices = [];
-                    let vertexOffset = 0;
-                    
-                    geometries.forEach(geom => {
-                        const pos = geom.attributes.position;
-                        const norm = geom.attributes.normal;
-                        const uv = geom.attributes.uv;
-                        
-                        // Add positions
-                        for (let i = 0; i < pos.count; i++) {
-                            mergedPositions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
-                            if (norm) {
-                                mergedNormals.push(norm.getX(i), norm.getY(i), norm.getZ(i));
-                            }
-                            if (uv) {
-                                mergedUvs.push(uv.getX(i), uv.getY(i));
-                            }
-                        }
-                        
-                        // Add indices with offset
-                        if (geom.index) {
-                            const indices = geom.index;
-                            for (let i = 0; i < indices.count; i++) {
-                                mergedIndices.push(indices.getX(i) + vertexOffset);
-                            }
-                        } else {
-                            // If no index, create sequential indices
-                            for (let i = 0; i < pos.count; i++) {
-                                mergedIndices.push(vertexOffset + i);
-                            }
-                        }
-                        
-                        vertexOffset += pos.count;
-                    });
-                    
-                    mergedGeometry.setAttribute('position', new THREE.Float32BufferAttribute(mergedPositions, 3));
-                    if (mergedNormals.length > 0) {
-                        mergedGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(mergedNormals, 3));
-                    }
-                    if (mergedUvs.length > 0) {
-                        mergedGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(mergedUvs, 2));
-                    }
-                    if (mergedIndices.length > 0) {
-                        mergedGeometry.setIndex(mergedIndices);
-                    }
-                    
-                    geometry = mergedGeometry;
-                }
-            } else {
-                // Load PLY file
-                const arrayBuffer = await blob.arrayBuffer();
-                const loader = new PLYLoader();
-                geometry = loader.parse(arrayBuffer);
-            }
+            renderBtn.disabled = true;
+            statusEl.textContent = 'Rendering...';
+            outputGif.style.display = 'none';
 
-            // Validate geometry
-            if (!geometry || !geometry.attributes || !geometry.attributes.position) {
-                throw new Error('Mesh file contains no valid geometry');
-            }
+            const formData = new FormData();
+            files.forEach(f => formData.append('files', f));
 
-            const positionAttr = geometry.attributes.position;
-            if (!positionAttr || positionAttr.count === 0) {
-                throw new Error('Mesh file contains no vertices');
-            }
-
-            // Compute normals if not present
-            if (!geometry.attributes.normal) {
-                geometry.computeVertexNormals();
-            }
-
-            // Create material
-            const material = new THREE.MeshStandardMaterial({
-                color: 0x888888,
-                metalness: 0.3,
-                roughness: 0.7,
-                flatShading: false
-            });
-
-            // Create mesh
-            meshObject = new THREE.Mesh(geometry, material);
-            scene.add(meshObject);
-
-            // Center and scale
             try {
-                geometry.computeBoundingBox();
-                const bbox = geometry.boundingBox;
-                
-                if (bbox) {
-                    const center = bbox.getCenter(new THREE.Vector3());
-                    const size = bbox.getSize(new THREE.Vector3());
-                    const maxDim = Math.max(size.x, size.y, size.z);
-                    
-                    if (maxDim > 0) {
-                        const scale = 1.8 / maxDim;
-                        meshObject.scale.multiplyScalar(scale);
-                        meshObject.position.sub(center.multiplyScalar(scale));
-                    }
+                const res = await fetch(`${apiBase}/reconstruct`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!res.ok) {
+                    const text = await res.text();
+                    throw new Error(`Server responded ${res.status}: ${text}`);
                 }
-            } catch (bboxError) {
-                console.warn('Could not compute bounding box:', bboxError);
+
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                outputGif.src = url;
+                outputGif.style.display = 'block';
+                statusEl.textContent = 'Done';
+            } catch (err) {
+                statusEl.textContent = `Error: ${err.message}`;
+            } finally {
+                renderBtn.disabled = false;
             }
-
-            // Reset camera
-            camera.position.set(0, 0, 2);
-            controls.target.set(0, 0, 0);
-            controls.update();
-
-            // Show viewer
-            document.getElementById('viewer3d').classList.add('active');
-            console.log('Mesh loaded successfully');
-            
-        } catch (err) {
-            console.error('Error loading mesh:', err);
-            alert('Error loading mesh: ' + err.message);
-            throw err;
-        }
-    }
-</script>
-
+        });
+    </script>
 </body>
 </html>
+
