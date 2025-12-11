@@ -55,6 +55,20 @@ async def reconstruct(files: List[UploadFile] = File(...)):
         return {"error": str(e)}
 
 
+@app.get("/download/{filename}")
+async def download_gif(filename: str):
+    """
+    Serve a generated GIF from the output directory.
+    """
+    safe_name = os.path.basename(filename)
+    output_path = os.path.join("output", safe_name)
+
+    if not os.path.exists(output_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(output_path, media_type="image/gif", filename=safe_name)
+
+
 
 if __name__ == "__main__":
     import uvicorn

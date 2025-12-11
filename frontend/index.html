@@ -21,6 +21,8 @@
         #output img { max-width: 520px; max-height: 520px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.4); display: none; }
         .preview-panel { background: #1c1c1c; padding: 16px; border-radius: 12px; min-width: 360px; max-width: 560px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
         .preview-title { margin: 0 0 10px 0; color: #ccc; font-size: 0.95rem; letter-spacing: 0.02em; }
+        #downloadBtn { margin-top: 10px; width: 100%; padding: 12px; background: #2f9e44; border: none; color: white; border-radius: 8px; font-weight: 700; cursor: pointer; display: none; }
+        #downloadBtn:disabled { background: #3f6b44; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -43,6 +45,7 @@
             <div id="output">
                 <img id="outputGif" alt="Generated GIF" />
             </div>
+            <button id="downloadBtn">Download GIF</button>
         </div>
     </div>
 
@@ -52,8 +55,11 @@
         const renderBtn = document.getElementById('renderBtn');
         const statusEl = document.getElementById('status');
         const outputGif = document.getElementById('outputGif');
+        const downloadBtn = document.getElementById('downloadBtn');
 
         let files = [];
+        let downloadUrl = null;
+        let downloadName = 'spin.gif';
 
         fileInput.addEventListener('change', (e) => {
             files = Array.from(e.target.files || []);
@@ -62,6 +68,7 @@
                 : '';
             renderBtn.disabled = files.length === 0;
             outputGif.style.display = 'none';
+            downloadBtn.style.display = 'none';
             statusEl.textContent = '';
         });
 
@@ -76,6 +83,11 @@
             renderBtn.disabled = true;
             statusEl.textContent = 'Rendering...';
             outputGif.style.display = 'none';
+            downloadBtn.style.display = 'none';
+            if (downloadUrl) {
+                URL.revokeObjectURL(downloadUrl);
+                downloadUrl = null;
+            }
 
             const formData = new FormData();
             files.forEach(f => formData.append('files', f));
@@ -92,15 +104,33 @@
                 }
 
                 const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                outputGif.src = url;
+                downloadUrl = URL.createObjectURL(blob);
+                const disposition = res.headers.get('content-disposition');
+                if (disposition) {
+                    const match = disposition.match(/filename="?([^"]+)"?/i);
+                    if (match && match[1]) {
+                        downloadName = match[1];
+                    }
+                }
+                outputGif.src = downloadUrl;
                 outputGif.style.display = 'block';
+                downloadBtn.style.display = 'block';
                 statusEl.textContent = 'Done';
             } catch (err) {
                 statusEl.textContent = `Error: ${err.message}`;
             } finally {
                 renderBtn.disabled = false;
             }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            if (!downloadUrl) return;
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = downloadName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         });
     </script>
 </body>
